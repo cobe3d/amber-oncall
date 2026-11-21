@@ -1,5 +1,7 @@
 # Amber的值班遊戲
 
+**▶ 直接玩：https://cobe3d.github.io/amber-oncall/**（電腦、平板、手機橫拿都可以）
+
 以《我熱愛值班》一般民眾版範本（[7harming/ilove-oncall-template](https://github.com/7harming/ilove-oncall-template)，drcharming.net）改編的版本：每一晚的病人、床位、護理師、數值和劇情都重新抽，同一個「今晚編號」可以重玩同一晚。目前有五床病人，每床兩種劇情。
 
 > 遊戲僅供衛教，不能取代就醫；遇到緊急狀況請打 119。病例內容上線前請醫師審閱。
