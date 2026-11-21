@@ -185,6 +185,8 @@ body.at-bedside .hud-right, body.at-bedside .hud-calls, body.at-bedside .goal { 
 }
 .caselist { margin: 0; padding: 0; list-style: none; display: grid; gap: .3em; font-size: .85em; }
 .caselist li { padding: .35em .5em; border-radius: .4em; background: #f2ede4; }
+/* which story the bed was tonight, under its result */
+.caselist .story { display: block; margin-top: .15em; font-size: .85em; color: #8a7d6b; }
 .caselist summary { display: grid; grid-template-columns: 3.9em 1fr auto 1em; gap: .6em; align-items: baseline; cursor: pointer; list-style: none; }
 .caselist summary::-webkit-details-marker { display: none; }
 .caselist summary::after { content: '▸'; color: #9a8f80; }

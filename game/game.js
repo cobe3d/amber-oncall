@@ -1,4 +1,4 @@
-// 我熱愛值班 · 一般民眾版範本
+// Amber的值班遊戲（以《我熱愛值班》一般民眾版範本製作）
 //
 // A night on call in a 3D ward, 17:00 to 08:00: the phone rings, some calls are small and some
 // are not, and each patient is a short script of choices at the bedside (public-cases.js).
@@ -12,7 +12,8 @@ import { RenderPass } from './vendor/three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from './vendor/three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from './vendor/three/addons/postprocessing/OutputPass.js';
 import { mergeGeometries } from './vendor/three/addons/utils/BufferGeometryUtils.js';
-import { PUBLIC_CALLS, DEEP_CALLS, DAWN_CALLS, AFTER_PHONE, PUBLIC_CASES, CPR } from './public-cases.js';
+import { PUBLIC_CALLS as CALL_BANK, DEEP_CALLS as DEEP_BANK, DAWN_CALLS as DAWN_BANK, AFTER_PHONE, PUBLIC_CASES as CASE_BANK, CPR } from './public-cases.js';
+import { NURSES, nurseFor, makeSeed, cleanSeed, seeded, drawBeds, pickStory, tellStory, castCase, fill } from './night-draw.js';
 import { CHATTER } from './chatter.js';
 
 // game.css hangs off this class; set it here too so a host page that owns <body> still gets it
@@ -30,7 +31,7 @@ const YAW = THREE.MathUtils.degToRad(35), PITCH = THREE.MathUtils.degToRad(40);
 
 // What the game is called, and the line that says what it was made from. A game made from this
 // template keeps CREDIT on its start card and its summary (see README.md, 授權).
-const GAME = { title: '我熱愛值班', edition: '一般民眾體驗版', site: location.host };
+const GAME = { title: 'Amber的值班遊戲', edition: '一般民眾體驗版', site: location.host };
 const CREDIT = { text: '以《我熱愛值班》範本製作', url: 'https://drcharming.net/' };
 
 try {
@@ -52,11 +53,17 @@ async function boot() {
 
   const frame = $('frame'), canvas = $('view');
   const rng = seed => { let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; };
-  // Tonight's ward name is drawn at random each shift (index.html?ward=6B picks one); every
+  // Tonight's code: everything drawn for the night (the ward, the beds, the calls and their
+  // times, the handover sheet) comes from it, so index.html?seed=K7Q2MX plays that night again.
+  // With no code in the address a new one is made, and the summary shows it to share.
+  const SEED = cleanSeed(new URLSearchParams(location.search).get('seed')) || makeSeed();
+  // the address of a new night (no code) or of this one again
+  const nightUrl = seed => { const u = new URL(location.href); if (seed) u.searchParams.set('seed', seed); else u.searchParams.delete('seed'); return u.href; };
+  // Tonight's ward name is drawn with the night (index.html?ward=6B picks one); every
   // ward has the same floor, only the room numbers change.
   const WARDS = ['5A', '5B', '6A', '6B', '7A', '7B'];
   const wardParam = new URLSearchParams(location.search).get('ward');
-  const WARD = WARDS.includes(wardParam) ? wardParam : WARDS[Math.floor(Math.random() * WARDS.length)];
+  const WARD = WARDS.includes(wardParam) ? wardParam : WARDS[Math.floor(seeded(SEED, 'ward')() * WARDS.length)];
   const wb = n => `${WARD}${n}`; // a room or bed on tonight's ward: wb('08B')
   // there are only choices to make, nothing to type, so the clock runs twice as fast as PACE says
   const PUBLIC_PACE = 2;
@@ -228,16 +235,42 @@ async function boot() {
   const ROOMS = Array.from({ length: 12 }, (_, i) => ({ n: wb(String(i + 1).padStart(2, '0')), front: true, x0: XE - (i + 1) * RW }));
   const BED_Z = { true: [9.2, 7.2, 5.2] };   // A by the window, C by the door
   // the rooms whose beds can ring get a call lamp and a wall monitor on every bed; the rest of
-  // the floor sleeps (README.md lists them for public-cases.js)
-  const CASE_ROOMS = ['03', '04', '06', '07', '08', '11'];
+  // the floor sleeps (README.md lists them)
+  const CASE_ROOMS = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
   const CASE_BEDS = Object.fromEntries(CASE_ROOMS.flatMap(n => ['A', 'B', 'C'].map(L => [wb(`${n}${L}`), { iv: L !== 'B' }])));
+
+  // ---------- tonight's beds ----------
+  // Each patient is first told one of its stories (night-draw.js pickStory; index.html?story=late
+  // forces that story on any case that has it, for testing one). Then every patient and every
+  // small-call person gets a bed of their own, drawn from the night's code, and the nurse of that
+  // bed's room; {nurse} in their words becomes her name. Last, each patient is cast for the night
+  // (night-draw.js castCase): a surname, 阿伯 or 阿嬤, an age, their own numbers ({bg}…) and
+  // monitor readings a few points off last night's. From here on PUBLIC_CASES and the call lists
+  // are tonight's copies, all of that filled in.
+  const STORY = new URLSearchParams(location.search).get('story');
+  const TOLD = CASE_BANK.map(c => tellStory(c, pickStory(c, seeded(SEED, `story/${c.id}`), STORY)));
+  const DRAWN = drawBeds({
+    beds: CASE_ROOMS.flatMap(n => ['A', 'B', 'C'].map(L => `${n}${L}`)),
+    cases: TOLD, calls: [...CALL_BANK, ...DEEP_BANK, ...DAWN_BANK], rand: seeded(SEED, 'beds'),
+  });
+  const surnamesTaken = new Set();
+  const PUBLIC_CASES = TOLD.map(told => {
+    const bed = DRAWN.caseBed[told.id], nurse = nurseFor(bed);
+    return { ...castCase(told, seeded(SEED, `people/${told.id}`), surnamesTaken, { nurse }), bed, nurse };
+  });
+  const tonightCall = c => { const bed = DRAWN.ptBed[c.pt]; return { ...fill(c, { nurse: nurseFor(bed) }), bed }; };
+  const PUBLIC_CALLS = CALL_BANK.map(tonightCall), DEEP_CALLS = DEEP_BANK.map(tonightCall), DAWN_CALLS = DAWN_BANK.map(tonightCall);
+  // every bed someone lies in tonight, with the ward's prefix: these are never empty, and never
+  // on the handover sheet
+  const TONIGHT_BEDS = new Set([...Object.values(DRAWN.caseBed), ...Object.values(DRAWN.ptBed)].map(wb));
+
   const HAIRS = ['#d6d6d6', '#b8b8b8', '#3a302b', '#e2e2e2', '#2b2421', '#9a9a9a', '#cfcfcf', '#4a3d36', '#bdbdbd'];
   const BEDS = [], BED = {};
   const rb = rng(31);
   ROOMS.forEach(room => ['A', 'B', 'C'].forEach((letter, k) => {
-    const id = `${room.n}${letter}`, cb = CASE_BEDS[id];
+    const id = `${room.n}${letter}`, cb = CASE_BEDS[id], mine = TONIGHT_BEDS.has(id);
     const b = { id, room, letter, x0: room.x0, x: room.x0 + 1.25, z: BED_Z[room.front][k], isCase: !!cb,
-      occupied: cb ? true : rb() < 0.72, iv: cb ? !!cb.iv : rb() < 0.4, hair: HAIRS[Math.floor(rb() * HAIRS.length)] };
+      occupied: mine || rb() < 0.72, iv: mine && cb ? !!cb.iv : rb() < 0.4, hair: HAIRS[Math.floor(rb() * HAIRS.length)] };
     BEDS.push(b); BED[id] = b;
   }));
   // where people stand around a bed: the head is against the room's west wall, the foot opens to the aisle
@@ -360,10 +393,11 @@ async function boot() {
   const lampOff = M('#7d858f', 0.4);
   const lampMat = { red: glow('#ff2a2a', 7), amber: glow('#ffa62b', 5), off: lampOff };
   const okTex = monitorTex({ hr: 76, spo2: 97, rr: 16, bp: '126/78', bt: '36.8' });
-  const TEX = {
-    [wb('08B')]: [monitorTex({ hr: 92, spo2: 96, rr: 18, bp: '188/96', bt: '36.8', alarm: true }), monitorTex({ hr: 84, spo2: 97, rr: 16, bp: '176/90', bt: '36.8' })],
-    [wb('03C')]: [monitorTex({ hr: 108, spo2: 96, rr: 18, bp: '104/64', bt: '36.7' }), okTex],
-  };
+  // a patient's wall monitor, on whichever bed they drew: tonight's `start` readings when the call
+  // comes (red over a dangerous number), then their `calm` state once stable, or the calm screen
+  const wallMon = st => monitorTex({ hr: st.hr, spo2: st.spo2 ?? '--', rr: 18, bp: st.bp ? st.bp.join('/') : '--/--', bt: '36.8',
+    alarm: (st.bp?.[0] ?? 0) >= 180 || st.hr >= 130 || (st.spo2 ?? 100) < 90 });
+  const TEX = Object.fromEntries(PUBLIC_CASES.filter(c => c.bed).map(c => [wb(c.bed), [wallMon(c.states.start), c.states[c.calm] ? wallMon(c.states[c.calm]) : okTex]]));
   // the electric bed: white frame, rounded foot board, blue-striped spread
   const B_M = {
     frame: M('#e6e9ec', 0.5), base: M('#aab3bb', 0.6), panel: M('#c4ccd3', 0.55), wheel: M('#2d333b', 0.6), mattress: M('#e7efea', 0.9),
@@ -437,9 +471,10 @@ async function boot() {
     monitors[b.id] = plane(mon, 0.52, 0.355, basic({ map: TEX[b.id] ? TEX[b.id][1] : okTex, toneMapped: false }), 0, 0, 0.062);
   }
   BEDS.forEach(bed);
-  // a reclining companion chair in some of the quiet rooms, folded against the aisle wall
+  // a reclining companion chair in some of the quiet rooms, folded against the aisle wall: only
+  // where the middle bed is nobody's tonight, since it stands where that bed's nurse would wait
   const reclM = M('#9bb0a0', 0.6);
-  ROOMS.filter((r, i) => i % 3 === 1 && !CASE_ROOMS.map(wb).includes(r.n)).forEach(r => {
+  ROOMS.filter((r, i) => i % 3 === 1 && !TONIGHT_BEDS.has(`${r.n}B`)).forEach(r => {
     const x = r.x0 + RW - 0.45, z = BED_Z[r.front][1];
     kb(reclM, 0.62, 0.42, 0.66, x, 0.4, z, 0.06); kb(reclM, 0.18, 0.7, 0.66, x + 0.24, 0.85, z, 0.06);
     kb(M('#2b2f36', 0.5), 0.08, 0.06, 0.6, x - 0.24, 0.66, z, 0.02);
@@ -863,23 +898,26 @@ async function boot() {
   // CASES holds every bed that can ring tonight. The patients and the corridor arrest are added
   // when the night is drawn (startPublicNight); the entries here are the small calls' scenes, for a
   // doctor who walks over anyway.
-  const pickN = (list, n) => list.map(v => [Math.random(), v]).sort((a, b) => a[0] - b[0]).slice(0, n).map(x => x[1]);
+  const pickN = (list, n, rand = Math.random) => list.map(v => [rand(), v]).sort((a, b) => a[0] - b[0]).slice(0, n).map(x => x[1]);
+  // a small call's scene plays at whichever bed that person drew tonight, with that room's nurse
+  const VISIT_BED = Object.fromEntries([...PUBLIC_CALLS, ...DEEP_CALLS, ...DAWN_CALLS].map(c => [c.visit, c.bed]));
+  const sceneAt = visit => { const b = VISIT_BED[visit] || '01A'; return { bed: wb(b), nurse: nurseFor(b) }; };
   const CASES = {
     // the patient was fine all along: walking over only costs sleep. The nurse is kind about it
     // (players read a smirk or a blank stare as the nurse mocking them)
-    'v-new': { bed: wb('03B'), kind: 'false', level: 'amber', nurse: '怡君', short: '新病人報到', face: 'thankful',
+    'v-new': { ...sceneAt('v-new'), kind: 'false', level: 'amber', short: '新病人報到', face: 'thankful',
       line: '醫師你怎麼跑來了？我電話裡說他很穩啊……他現在睡得比你還好。' },
-    'v-ins': { bed: wb('08A'), kind: 'false', level: 'amber', nurse: '小雯', short: '睡不著想要安眠藥', face: 'thankful',
+    'v-ins': { ...sceneAt('v-ins'), kind: 'false', level: 'amber', short: '睡不著想要安眠藥', face: 'thankful',
       line: '……醫師，他只是睡不著，你一來他更清醒了。電話講一聲就好啦。' },
-    'v-iv': { bed: wb('03A'), kind: 'false', level: 'amber', nurse: '怡君', short: '點滴跑完了', face: 'thankful',
+    'v-iv': { ...sceneAt('v-iv'), kind: 'false', level: 'amber', short: '點滴跑完了', face: 'thankful',
       line: '醫師，電話說「續原本的」就好了啦。不過既然你都來了，順便幫我看一下他的點滴部位好了。' },
-    'v-stool': { bed: wb('08A'), kind: 'false', level: 'amber', nurse: '小雯', short: '三天沒大便', face: 'thankful',
+    'v-stool': { ...sceneAt('v-stool'), kind: 'false', level: 'amber', short: '三天沒大便', face: 'thankful',
       line: '醫師……你五點跑來看大便？電話說「給一顆軟便藥」就好了啦。' },
-    'v-temp': { bed: wb('11A'), kind: 'false', level: 'amber', nurse: '佳穎', short: '體溫 37.8 度', face: 'thankful',
+    'v-temp': { ...sceneAt('v-temp'), kind: 'false', level: 'amber', short: '體溫 37.8 度', face: 'thankful',
       line: '醫師……37.8 而已，他睡得比你還熟。我只是照規定跟你報告，你快回去躺吧。' },
-    'v-bp': { bed: wb('03B'), kind: 'false', level: 'amber', nurse: '怡君', short: '早上血壓有點高', face: 'thankful',
+    'v-bp': { ...sceneAt('v-bp'), kind: 'false', level: 'amber', short: '早上血壓有點高', face: 'thankful',
       line: '醫師，他血壓一點點高、人好好的，我只是照規定跟你報告……快交班了，你回去躺十分鐘吧。' },
-    'v-fam': { bed: wb('11A'), kind: 'false', level: 'amber', nurse: '佳穎', short: '家屬問出院時間', face: 'thankful',
+    'v-fam': { ...sceneAt('v-fam'), kind: 'false', level: 'amber', short: '家屬問出院時間', face: 'thankful',
       line: '醫師你怎麼親自跑來了？家屬只是想問明天幾點出院，你講一聲我轉達就好啦。' },
   };
   // the shift: handover at 17:00, the day team is back at 08:00 the next morning
@@ -1046,14 +1084,14 @@ async function boot() {
     const c = CASES[id];
     S.calls[id] = { state: 'active', since: S.t - late };
     ensureNurse(c.bed).userData.chatName = c.nurse; markFor(id);
-    if (TEX[c.bed] && monitors[c.bed]) { monitors[c.bed].material.map = TEX[c.bed][0]; monitors[c.bed].material.needsUpdate = true; }
+    if (c.kind === 'public' && TEX[c.bed] && monitors[c.bed]) { monitors[c.bed].material.map = TEX[c.bed][0]; monitors[c.bed].material.needsUpdate = true; }
   }
   function resolve(id, stable = true) {
     const c = CASES[id], call = S.calls[id];
     if (call.state === 'done') return;
     call.state = 'done'; call.at = S.t; call.stable = stable;
     lamps[c.bed].material = lampOff;
-    if (stable && TEX[c.bed] && monitors[c.bed]) { monitors[c.bed].material.map = TEX[c.bed][1]; monitors[c.bed].material.needsUpdate = true; }
+    if (stable && c.kind === 'public' && TEX[c.bed] && monitors[c.bed]) { monitors[c.bed].material.map = TEX[c.bed][1]; monitors[c.bed].material.needsUpdate = true; }
     const m = markFor(id); m.className = 'mk done'; m.innerHTML = `<span class="bang">${stable ? '✓' : '…'}</span>`;
     call.flashUntil = performance.now() + 2500;
   }
@@ -1290,10 +1328,12 @@ async function boot() {
   ];
   // 17:00, once the doctor has read the handover: draw the night
   function startPublicNight() {
+    // the night's own stream of numbers: the same code rings the same patients at the same times
+    const R = seeded(SEED, `night/${S.shift}`);
     PUBLIC_CASES.forEach(c => { CASES[c.id] = { bed: wb(c.bed), kind: 'public', level: 'red', nurse: c.nurse, short: c.short }; });
-    const want = (S.shift === 'hard' ? 6 : 4) + Math.floor(Math.random() * 3);
+    const want = (S.shift === 'hard' ? 6 : 4) + Math.floor(R() * 3);
     // each slot takes a bed it can ring at, in a random order; a dark slot takes a 半夜 bed first
-    const left = pickN(PUBLIC_CASES, PUBLIC_CASES.length), filled = [];
+    const left = pickN(PUBLIC_CASES.filter(c => !c.escalates), PUBLIC_CASES.length, R), filled = [];
     for (const slot of NIGHT_SLOTS) {
       if (filled.length >= want) break;
       const fits = left.filter(c => slot.dark || !c.night);
@@ -1307,10 +1347,10 @@ async function boot() {
     const tonight = [...filled].sort((a, b) => a.seq - b.seq).map(f => f.c);
     night.dinner = of('dinner')?.id || null;
     if (!night.dinner) S.interrupted = true;   // no dinner patient: the bento is eaten in peace
-    const day = pickN(PUBLIC_CALLS.filter(c => !c.night), 2), dark = pickN(PUBLIC_CALLS.filter(c => !day.includes(c)), 2);
-    const between = (a, b) => a + Math.random() * (b - a);
+    const day = pickN(PUBLIC_CALLS.filter(c => !c.night), 2, R), dark = pickN(PUBLIC_CALLS.filter(c => !day.includes(c)), 2, R);
+    const between = (a, b) => a + R() * (b - a);
     Object.assign(S, { plog: [], late: {}, outcome: {}, pretries: 0, trivial: 0, tonight,
-      nightAt: 23 * 60 + 30 + Math.random() * 30,
+      nightAt: 23 * 60 + 30 + R() * 30,
       pschedule: [
         // two small things in the evening
         { at: between(17 * 60 + 30, 17 * 60 + 50), item: day[0] },
@@ -1323,6 +1363,16 @@ async function boot() {
       ].filter(e => e.item).map(e => ({ ...e, done: false })),
       // after lights out: two that need nobody, then the midnight patient
       pq: [...dark, ...(of('late') ? [realCall(of('late'))] : [])] });
+    // A small call that turns serious (a story with `escalates`): the same person rings again as a
+    // patient, `after` minutes after that call, whatever the doctor said to it. Its own quiet
+    // ending (sleepNote) is swapped for one that leads into it. Only calls rung by the clock can.
+    for (const c of PUBLIC_CASES.filter(x => x.escalates)) {
+      const e = S.pschedule.find(x => x.item.id === c.escalates.call);
+      if (!e) continue;
+      if (c.escalates.sleepNote) e.item = { ...e.item, sleepNote: c.escalates.sleepNote };
+      S.pschedule.push({ at: e.at + between(...c.escalates.after), item: realCall(c), done: false });
+      tonight.push(c);
+    }
     S.nextCallAt = S.nightAt;
   }
   // every frame of the night: the evening's calls by the clock, dinner, the night's calls,
@@ -1625,7 +1675,7 @@ async function boot() {
     PC.step = null;
     openPublicCase(PC.id);
   });
-  $('pdAgain').addEventListener('click', () => { if (!held($('pdAgain').parentElement)) location.reload(); });
+  $('pdAgain').addEventListener('click', () => { if (!held($('pdAgain').parentElement)) location.assign(nightUrl(null)); });
   // the summary's word on looking after yourself, for a doctor who went without food or held it in
   function selfCare() {
     const lines = [
@@ -1642,7 +1692,7 @@ async function boot() {
     const st = S.stats, tonight = S.tonight || [], seen = tonight.filter(c => S.outcome?.[c.id]), all = tonight.length > 0 && seen.length === tonight.length;
     // a patient whose call came but who was never stabilised by 08:00
     const left = tonight.filter(c => S.calls[c.id]?.state === 'active');
-    document.querySelector('#handover .mark').textContent = `${GAME.title} · ${GAME.edition} · ${SHIFT_NAME[S.shift]}`;
+    document.querySelector('#handover .mark').textContent = `${GAME.title} · ${GAME.edition} · ${SHIFT_NAME[S.shift]} · 今晚編號 ${SEED}`;
     $('hStamp').hidden = S.shift !== 'hard';
     if (S.shift === 'hard') drawStamp($('hStamp'), '#cf2027');
     $('hWhen').textContent = `${fmt(S.t)} · ${S.collapsed ? '累倒了' : S.t >= END ? '白班來接手了' : '提早交班'}`;
@@ -1653,8 +1703,10 @@ async function boot() {
       ['白跑一趟', st.wentFine, '次'], ['穩住的病人', seen.length, `/ ${tonight.length}`], ['從床邊重來', S.pretries || 0, '次'],
     ].map(([k, v, u]) => `<div class="stat"><small>${k}</small><b>${v}<span>${u}</span></b></div>`).join('');
     const cards = tonight.filter(c => S.calls[c.id]);
-    $('hCases').innerHTML = seen.map(c => `<li class="tip"><b>${CASES[c.id].bed}</b> ${esc(c.results[S.outcome[c.id]])}</li>`).join('')
-      + left.map(c => `<li class="tip miss"><b>${CASES[c.id].bed}</b> ${esc(c.name)}${S.calls[c.id].opened ? '還沒處理好，就交給白班了' : '等到早上，都沒有醫師去看'}</li>`).join('')
+    // which story each bed was tonight, so a player who plays again knows it can go another way
+    const told = c => (c.storyLabel ? `<small class="story">今晚：${esc(c.storyLabel)}</small>` : '');
+    $('hCases').innerHTML = seen.map(c => `<li class="tip"><b>${CASES[c.id].bed}</b> ${esc(c.results[S.outcome[c.id]])}${told(c)}</li>`).join('')
+      + left.map(c => `<li class="tip miss"><b>${CASES[c.id].bed}</b> ${esc(c.name)}${S.calls[c.id].opened ? '還沒處理好，就交給白班了' : '等到早上，都沒有醫師去看'}${told(c)}</li>`).join('')
       + cards.map(c => `<li class="tiphead">${esc(c.card.title)}</li>` + c.card.points.map(p => `<li class="tip">${esc(p)}</li>`).join('')).join('')
       + selfCare();
     $('hScore').textContent = st.wakeups;
@@ -1670,7 +1722,9 @@ async function boot() {
 
   // ---------- ending ----------
   const endShift = () => publicSummary();
-  $('hAgain').addEventListener('click', () => location.reload());
+  // 再值一晚 draws a new night; 同一晚再玩一次 plays this code again
+  $('hAgain').addEventListener('click', () => location.assign(nightUrl(null)));
+  $('hSame').addEventListener('click', () => location.assign(nightUrl(SEED)));
   $('hCopy').addEventListener('click', () => {
     const b = $('hCopy');
     navigator.clipboard.writeText(shareText()).then(() => { b.textContent = '已複製'; }, () => { b.textContent = '無法複製，請手動選取'; });
@@ -1689,7 +1743,7 @@ async function boot() {
     const badge = $('hBadge').textContent;
     return [`🌙 ${GAME.title}｜${GAME.edition}・${SHIFT_NAME[S.shift]}`, $('hWhen').textContent, $('hTitle').textContent,
       ...summaryStats().map(([k, v, u]) => `・${k} ${v}${u ? ` ${u}` : ''}`),
-      badge, `你撐得過一晚嗎？👉 ${shareUrl()}`, CREDIT.text].join('\n');
+      badge, `你撐得過一晚嗎？👉 ${shareUrl()}`, `挑戰我這一晚（編號 ${SEED}）👉 ${shareUrl()}?seed=${SEED}`, CREDIT.text].join('\n');
   }
   // text that wraps by character, as Chinese does
   function wrapText(g, text, width) {
@@ -1724,7 +1778,7 @@ async function boot() {
     const glow = g.createRadialGradient(W / 2, 560, 40, W / 2, 560, 560); glow.addColorStop(0, 'rgba(69, 227, 204, .22)'); glow.addColorStop(1, 'rgba(69, 227, 204, 0)');
     g.fillStyle = glow; g.fillRect(0, 0, W, 1150);
     g.textAlign = 'center'; g.textBaseline = 'alphabetic';
-    g.fillStyle = '#45e3cc'; g.font = `700 36px ${font}`; g.fillText(`${GAME.edition} · ${SHIFT_NAME[S.shift]}`, W / 2, 118);
+    g.fillStyle = '#45e3cc'; g.font = `700 36px ${font}`; g.fillText(`${GAME.edition} · ${SHIFT_NAME[S.shift]} · 今晚編號 ${SEED}`, W / 2, 118);
     g.fillStyle = '#eef3f6'; g.font = `900 100px ${font}`; g.fillText(GAME.title, W / 2, 228);
     // the doctor, as on the summary
     const px = 250, py = 280, pw = 580, ph = 600, img = new Image();
@@ -1844,19 +1898,23 @@ async function boot() {
   ];
   function showBrief() {
     $('briefTitle').textContent = `今晚，${WARD} 交給你了`;
-    $('briefEyebrow').textContent = `交班 · 熱愛 內科 ${WARD} 病房`;
+    $('briefEyebrow').textContent = `交班 · 內科 ${WARD} 病房 · 今晚編號 ${SEED}`;
+    // the sheet is drawn from the night's code too, so a night played again reads the same
+    const R = seeded(SEED, 'handover');
     $('briefMe').src = ME('confident');
     $('briefLevel').textContent = `${S.nick ? `${S.nick}醫師` : '你'} · 今晚的值班醫師`;
-    $('briefFrom').textContent = `白班 R1 ${pickN(['陳', '黃', '張', '李', '吳', '蔡'], 1)[0]}醫師 → 你`;
+    $('briefFrom').textContent = `白班 R1 ${pickN(['陳', '黃', '張', '李', '吳', '蔡'], 1, R)[0]}醫師 → 你`;
     const n = Math.min(5, DECOYS.length);
-    const beds = pickN(BEDS.filter(b => !b.isCase && b.occupied), n).sort((a, b) => a.id.localeCompare(b.id));
-    const items = pickN(DECOYS, n);
+    // quiet beds only: nobody who will ring tonight is on the sheet
+    const beds = pickN(BEDS.filter(b => b.occupied && !TONIGHT_BEDS.has(b.id)), n, R).sort((a, b) => a.id.localeCompare(b.id));
+    const items = pickN(DECOYS, n, R);
     $('briefList').innerHTML = beds.map((b, i) => {
-      const d = items[i], age = d.age[0] + Math.floor(Math.random() * (d.age[1] - d.age[0] + 1));
-      return `<div class="pt"><b>${b.id}</b><strong>${pickN(SURNAMES, 1)[0]}${d.who} ${age} 歲 · ${d.dx}</strong><span>${d.lay}</span></div>`;
+      const d = items[i], age = d.age[0] + Math.floor(R() * (d.age[1] - d.age[0] + 1));
+      return `<div class="pt"><b>${b.id}</b><strong>${pickN(SURNAMES, 1, R)[0]}${d.who} ${age} 歲 · ${d.dx}</strong><span>${d.lay}</span></div>`;
     }).join('');
-    $('briefTeam').innerHTML = [['怡君', 'nurse_neutral', '01', '04'], ['小雯', 'nurse_caring', '05', '08'], ['佳穎', 'nurse_thankful', '09', '12']]
-      .map(([n, face, a, z]) => `<div class="nurse"><span class="av" style="background-image:url(${IMG(face)})"></span><b>${n}</b><small>${wb(a)} – ${wb(z)}</small></div>`).join('');
+    const room = n => String(n).padStart(2, '0');
+    $('briefTeam').innerHTML = NURSES
+      .map(({ name, face, from, to }) => `<div class="nurse"><span class="av" style="background-image:url(${IMG(face)})"></span><b>${name}</b><small>${wb(room(from))} – ${wb(room(to))}</small></div>`).join('');
     $('brief').hidden = false;
     setTimeout(() => $('briefGo').focus(), 60);
   }
@@ -2196,7 +2254,7 @@ async function boot() {
   $('start').hidden = false;
   // index.html?debug exposes a handle for scripted playtests; on its own it changes nothing but ]
   if (DEBUG) {
-    window.__ward = { S, night, CASES, PC, TALKERS, openChat, step: (n = 1) => { for (let i = 0; i < n; i++) runFrame(last + 1000 / 60); }, publicCall, publicTick, openPublicCase, BED, WARD, renderer, scene, composer, solids, openCase, spawnCase, startSleep, place, get player() { return player; }, get quality() { return quality; } };
+    window.__ward = { S, night, CASES, PC, TALKERS, openChat, step: (n = 1) => { for (let i = 0; i < n; i++) runFrame(last + 1000 / 60); }, publicCall, publicTick, openPublicCase, BED, WARD, SEED, DRAWN, renderer, scene, composer, solids, openCase, spawnCase, startSleep, place, get player() { return player; }, get quality() { return quality; } };
   }
   requestAnimationFrame(frameLoop);
 }

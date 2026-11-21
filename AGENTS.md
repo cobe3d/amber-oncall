@@ -23,6 +23,7 @@
   - `sharing`：分享圖卡（1080×1920 canvas）、`drawStamp`（大爛班印章）。
   - `start`、`17:00 handover`、`input`、`pause`、`movement`、`loop`（`runFrame`）。
 - 狀態：一個物件 `S`。`S.mode` 是現在在做什麼：`walk`、`eat`、`sleep`、`toilet`、`chat`、`scall`（電話卡）、`interrupt`（吃飯被打斷）、`recall`（護理師再打來）、`pcase`（床邊）、`pdead`（死亡畫面）、`false`（白跑一趟那一幕）、`lab`（看檢驗報告）、`end`。`runFrame` 依 `S.mode` 決定時鐘速度（`PACE` × `PUBLIC_PACE`）。床邊的狀態在 `PC`。
+- `game/night-draw.js`：今晚編號（`?seed=`）、有種子的亂數（`seeded(SEED, 用途)`，每個用途一條，互不影響）、抽床位（`drawBeds`）、護理師分區（`NURSES`、`nurseFor`）、`pickStory` / `tellStory` / `mergeStory`（一床的 `variants` 每晚抽一個故事合併進去：物件逐層合併、選項照 id 合併、`drop: true` 拿掉；故事可以有 `pt` + `escalates`，讓一通照時間響的小事在 `after` 分鐘後變成這床病人，見 `startPublicNight` 最後）、`castCase`（病人今晚是誰：`persona` 抽姓氏、性別、年齡，`vars` 抽這床的數字，`jitter` 讓監視器整組偏移）、`fill`（把 `{nurse}`、`{name}`、`{bg}`… 換掉；一格只寫 `'{bg}'` 會變成數字）。`game.js` 一開機就抽好床，之後的 `PUBLIC_CASES`、`PUBLIC_CALLS` 等都是今晚的副本（床號、護理師已填好）；原始資料匯入時改名為 `CASE_BANK`、`CALL_BANK`……。
 - `game/public-cases.js`：純資料，`game.js` 只負責播放。格式見 README〈加一床病人〉和檔案裡的註解。
 - `game/chatter.js`：可以聊天的人和台詞（`when` 依時間、精力等條件出現）。
 - `assets/game/char/*.svg`：佔位立繪，由 `tools/make-placeholders.mjs` 產生（`IMG()` 指到這裡）。病房本身沒有任何圖檔，全部是 `game.js` 用程式蓋的。
@@ -34,7 +35,8 @@
 - 畫面上的字一律繁體中文，口語、短句。醫療內容寫給一般民眾：不寫藥物劑量，監視器用白話。
 - 沿用現有寫法：`$('id')`、`toast()`、`plog()`、`fmt()`、`pickN()`；新的畫面元素加在 `index.html`，樣式加在 `game.css`。
 - 改 `public-cases.js` 的格式時，同步更新 `tests/check-data.mjs`、README 的欄位表、檔案裡的格式註解。
-- 新增病床可用的房間要加到 `CASE_ROOMS`；新增小事電話要在 `CASES` 加一個 `v-` 開頭的場景；新增監視器第四格的種類要加到 `EXTRA`。測試會從 `game.js` 讀這三個表。
+- 資料裡不寫床號和護理師名字：病人不寫 `bed`、`nurse`，小事電話用 `pt` 分組，對話裡寫 `{nurse}`；病人的名字、稱呼、他／她、年齡寫 `{name}`、`{title}`、`{he}`、`{age}`，會變的數字放進 `vars`。抽到什麼都要從 `SEED` 來（用 `seeded(SEED, '用途')`，不要用 `Math.random`），同一個編號才會是同一晚；只有跟玩家怎麼玩有關的（例如再打來的間隔）可以用 `Math.random`。
+- 可以響的房間在 `CASE_ROOMS`；新增小事電話要在 `CASES` 加一個 `v-` 開頭的場景；新增監視器第四格的種類要加到 `EXTRA`。測試會從 `game.js` 讀這三個表。
 - `NIGHT_SLOTS` 的抽床規則改了，`tests/check-data.mjs` 最後模擬抽床的那段也要一起改（它照抄同一套規則）。
 
 ## 不要做
